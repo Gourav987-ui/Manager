@@ -12,6 +12,7 @@ const config = JSON.parse(
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const PORT = config.port || 3456;
 const USERS = config.auth?.users || { 'admin@example.com': 'admin123' };
+const AUTH_DISABLED = !!config.auth?.disabled;
 
 if (!fs.existsSync(TEST_SHEETS_PATH)) {
   fs.mkdirSync(TEST_SHEETS_PATH, { recursive: true });
@@ -27,14 +28,15 @@ app.use(session({
   cookie: { httpOnly: true, secure: false },
 }));
 
-app.get('/login', (_, res) => {
+app.get('/login', (req, res) => {
+  if (AUTH_DISABLED) return res.redirect('/');
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
 app.use(express.static('public'));
 
 const requireAuth = (req, res, next) => {
-  if (req.session?.email) return next();
+  if (AUTH_DISABLED || req.session?.email) return next();
   res.status(401).json({ error: 'Unauthorized' });
 };
 
@@ -57,9 +59,8 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  if (req.session?.email) {
-    return res.json({ email: req.session.email });
-  }
+  if (AUTH_DISABLED) return res.json({ email: 'guest@local' });
+  if (req.session?.email) return res.json({ email: req.session.email });
   res.status(401).json({ error: 'Not authenticated' });
 });
 
@@ -144,4 +145,5 @@ app.delete('/api/sheets/:filename', requireAuth, (req, res) => {
 app.listen(PORT, () => {
   console.log(`Test Sheet Manager running at http://localhost:${PORT}`);
   console.log(`Sheets folder: ${TEST_SHEETS_PATH}`);
+  if (AUTH_DISABLED) console.log('Auth is DISABLED — login bypassed');
 });

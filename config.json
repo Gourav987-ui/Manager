@@ -2,6 +2,7 @@
   "testSheetsPath": "D:\\TestSheetManager\\Testsheets",
   "port": 3457,
   "auth": {
+    "disabled": true,
     "users": {
       "gourav.singh@thecodeinsight.com": "CodeInsight@123",
       "jitesh.kumar@thecodeinsight.com": "admin@123"
