@@ -117,7 +117,10 @@ function checkAuth(res) {
 
 async function fetchSheets() {
   const res = await fetch(`${API}/sheets`, { credentials: 'include' }).then(checkAuth);
-  if (!res.ok) throw new Error('Failed to load sheets');
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || `Failed to load sheets (${res.status})`);
+  }
   allSheets = await res.json();
   renderSheets(allSheets);
 }
@@ -361,9 +364,10 @@ async function init() {
   }
 
   fetchSheets().catch((err) => {
+    const msg = err.message || 'Failed to load sheets';
     sheetsBody.innerHTML = `
       <tr class="empty-row">
-        <td colspan="6">Error: ${escapeHtml(err.message)}. Make sure the server is running and config.testSheetsPath exists.</td>
+        <td colspan="6">Error: ${escapeHtml(msg)}. Make sure the server is running (local) or deployment is complete (Netlify).</td>
       </tr>
     `;
   });
