@@ -330,33 +330,34 @@ fileInput.addEventListener('change', async (e) => {
 });
 
 async function init() {
+  let me = { email: 'guest@local' };
   try {
     const meRes = await fetch(`${API}/me`, { credentials: 'include' });
     if (meRes.status === 401) {
       window.location.href = '/login';
       return;
     }
-    const me = await meRes.json();
-    const userEmailEl = document.getElementById('userEmail');
-    if (userEmailEl) userEmailEl.textContent = me.email || '—';
-    const avatarInitialsEl = document.getElementById('avatarInitials');
-    if (userAvatar && me.email) {
-      userAvatar.title = me.email;
-      const local = me.email.split('@')[0] || '';
-      const parts = local.split(/[._\s-]+/).filter(Boolean);
-      const initials = parts.slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '';
-      const avatarColors = ['#E91E63', '#9C27B0', '#2196F3', '#00BCD4', '#009688', '#4CAF50', '#8BC34A', '#FF9800', '#FF5722', '#F44336', '#673AB7', '#3F51B5', '#03A9F4', '#00ACC1', '#7CB342', '#FFC107'];
-      const bg = avatarColors[Math.floor(Math.random() * avatarColors.length)];
-      userAvatar.style.background = bg;
-      if (avatarInitialsEl && initials) {
-        avatarInitialsEl.textContent = initials;
-        avatarInitialsEl.style.color = '#fff';
-        userAvatar.classList.add('has-initials');
-      }
-    }
+    if (meRes.ok) me = await meRes.json().catch(() => me);
   } catch {
-    window.location.href = '/login';
-    return;
+    /* API unreachable (e.g. static deploy) – continue as guest */
+  }
+
+  const userEmailEl = document.getElementById('userEmail');
+  if (userEmailEl) userEmailEl.textContent = me.email || '—';
+  const avatarInitialsEl = document.getElementById('avatarInitials');
+  if (userAvatar && me.email) {
+    userAvatar.title = me.email;
+    const local = me.email.split('@')[0] || '';
+    const parts = local.split(/[._\s-]+/).filter(Boolean);
+    const initials = parts.slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '';
+    const avatarColors = ['#E91E63', '#9C27B0', '#2196F3', '#00BCD4', '#009688', '#4CAF50', '#8BC34A', '#FF9800', '#FF5722', '#F44336', '#673AB7', '#3F51B5', '#03A9F4', '#00ACC1', '#7CB342', '#FFC107'];
+    const bg = avatarColors[Math.floor(Math.random() * avatarColors.length)];
+    userAvatar.style.background = bg;
+    if (avatarInitialsEl && initials) {
+      avatarInitialsEl.textContent = initials;
+      avatarInitialsEl.style.color = '#fff';
+      userAvatar.classList.add('has-initials');
+    }
   }
 
   fetchSheets().catch((err) => {

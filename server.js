@@ -28,6 +28,10 @@ app.use(session({
   cookie: { httpOnly: true, secure: false },
 }));
 
+app.get('/', (_, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.get('/login', (req, res) => {
   if (AUTH_DISABLED) return res.redirect('/');
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
