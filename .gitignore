@@ -1,0 +1,14 @@
+./node_modules
+./dist
+./build
+./public
+./server.js
+./config.json
+./package.json
+./package-lock.json
+./README.md
+./LICENSE
+./CHANGELOG.md
+./CONTRIBUTING.md
+./CODE_OF_CONDUCT.md
+./SECURITY.mdS

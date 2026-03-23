@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Sheet Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="left-tab" id="leftTab">
+    <div class="settings-bottom">
+      <button type="button" class="settings-btn" id="settingsBtn" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+        </svg>
+      </button>
+      <div class="settings-panel" id="settingsPanel" hidden>
+        <button type="button" class="theme-toggle" id="themeToggle" title="Toggle theme">
+          <span class="theme-icon" id="themeIcon">☾</span>
+          <span class="theme-label">Theme</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+  <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
+  <div class="app">
+    <header class="header">
+      <div class="header-content">
+        <h1>Test Sheet Manager</h1>
+        <p class="subtitle">Manage your manual test case Excel sheets</p>
+      </div>
+      <div class="user-info header-right">
+        <div class="avatar-dropdown-wrap">
+          <button type="button" class="user-avatar" id="userAvatar" title="" aria-expanded="false" aria-haspopup="true">
+            <span class="avatar-initials" id="avatarInitials"></span>
+            <svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 10-16 0"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="toolbar">
+        <div class="search-wrap">
+          <input type="text" id="search" placeholder="Filter by ticket or filename..." autocomplete="off">
+        </div>
+        <div class="bulk-actions" id="bulkActions" hidden>
+          <button type="button" class="btn btn-download" id="bulkDownload" title="Download selected"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+          <button type="button" class="btn btn-delete" id="bulkDelete" title="Delete selected">Delete</button>
+        </div>
+        <label class="upload-btn">
+          <input type="file" id="fileInput" accept=".xlsx,.xls" multiple hidden>
+          <span>Upload sheets</span>
+        </label>
+        <button type="button" class="refresh-btn" id="refresh" title="Refresh">↻</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="sheets-table">
+          <thead>
+            <tr>
+              <th class="th-checkbox"><input type="checkbox" id="selectAll" title="Select all"></th>
+              <th>Ticket</th>
+              <th>Filename</th>
+              <th>Modified</th>
+              <th>Size</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="sheetsBody">
+            <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <p>No test sheets yet.</p>
+        <p>Upload an Excel file or create one from a Jira ticket.</p>
+      </div>
+    </main>
+  </div>
+  <div class="avatar-backdrop" id="avatarBackdrop" hidden></div>
+  <div class="avatar-dropdown" id="avatarDropdown" hidden>
+    <span class="avatar-dropdown-email" id="userEmail">—</span>
+    <button type="button" class="logout-btn" id="logout">Logout</button>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
