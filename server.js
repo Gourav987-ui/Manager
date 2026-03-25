@@ -13,6 +13,43 @@ try {
 } catch {
   config = {};
 }
+
+function parseEnvBool(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function parseAuthUsers() {
+  const users = {};
+  const jsonValue = process.env.AUTH_USERS_JSON;
+  if (jsonValue) {
+    try {
+      const parsed = JSON.parse(jsonValue);
+      Object.entries(parsed || {}).forEach(([email, password]) => {
+        if (!email || !password) return;
+        users[String(email).trim().toLowerCase()] = String(password);
+      });
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+  const raw = process.env.AUTH_USERS;
+  if (raw) {
+    raw.split(',').forEach((pair) => {
+      const trimmed = pair.trim();
+      if (!trimmed) return;
+      const [email, password] = trimmed.includes(':')
+        ? trimmed.split(':')
+        : trimmed.split('=');
+      if (!email || !password) return;
+      users[String(email).trim().toLowerCase()] = String(password).trim();
+    });
+  }
+  return users;
+}
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
 const NETLIFY_SITE_ID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
@@ -72,8 +109,9 @@ function emailToName(email) {
   return unique.join(' ');
 }
 const PORT = config.port || 3456;
-const USERS = config.auth?.users || { 'admin@example.com': 'admin123' };
-const AUTH_DISABLED = !!config.auth?.disabled;
+const ENV_USERS = parseAuthUsers();
+const USERS = Object.keys(ENV_USERS).length > 0 ? ENV_USERS : (config.auth?.users || { 'admin@example.com': 'admin123' });
+const AUTH_DISABLED = parseEnvBool(process.env.AUTH_DISABLED) ?? !!config.auth?.disabled;
 
 if (!USE_NETLIFY_BLOBS && !fs.existsSync(TEST_SHEETS_PATH)) {
   fs.mkdirSync(TEST_SHEETS_PATH, { recursive: true });

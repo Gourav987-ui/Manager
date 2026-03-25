@@ -4,7 +4,7 @@
   "auth": {
     "disabled": false,
     "users": {
-      "gourav.singh@thecodeinsight.com": "CodeInsight@123",
+      "gourav.singh@thecodeinsight.com": "Admin@123",
       "jitesh.kumar@thecodeinsight.com": "admin@123"
     }
   },
