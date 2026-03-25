@@ -539,6 +539,75 @@ function addTestCaseRow(sheet, rowNumber, testCase) {
   applyRowStyle(row, false);
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function cellValueToText(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    if (value.text) return value.text;
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((rt) => rt.text).join('');
+    }
+    if (value.formula !== undefined) {
+      return value.result !== undefined ? String(value.result) : String(value.formula);
+    }
+    if (value.hyperlink) return value.text || value.hyperlink;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function renderSheetHtml(filename, sheet) {
+  const rows = sheet.getSheetValues();
+  const rowCount = sheet.actualRowCount || rows.length - 1;
+  const colCount = sheet.actualColumnCount || Math.max(...rows.map((r) => (Array.isArray(r) ? r.length : 0)), 0);
+  const safeName = escapeHtml(filename);
+  let body = '';
+  for (let r = 1; r <= rowCount; r += 1) {
+    const row = rows[r] || [];
+    body += '<tr>';
+    for (let c = 1; c <= colCount; c += 1) {
+      const value = cellValueToText(row[c]);
+      body += `<td>${escapeHtml(value)}</td>`;
+    }
+    body += '</tr>';
+  }
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${safeName}</title>
+  <style>
+    body { font-family: "Outfit", Arial, sans-serif; margin: 24px; color: #111827; }
+    h1 { font-size: 1.1rem; margin-bottom: 16px; }
+    .table-wrap { overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+    td { border: 1px solid #e5e7eb; padding: 6px 8px; vertical-align: top; white-space: pre-wrap; }
+    tr:nth-child(even) { background: #f9fafb; }
+  </style>
+</head>
+<body>
+  <h1>${safeName}</h1>
+  <div class="table-wrap">
+    <table>
+      ${body}
+    </table>
+  </div>
+</body>
+</html>`;
+}
+
 async function fetchJiraIssue(key) {
   const jira = getJiraSettings();
   if (!jira.email || !jira.apiToken || !jira.domain) {
@@ -692,6 +761,22 @@ app.get('/api/sheets/open', requireAuth, (req, res) => {
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', `inline; filename="${safeName.replace(/"/g, '\\"')}"`);
     res.send(buffer);
+  })().catch((err) => res.status(500).json({ error: err.message }));
+});
+
+app.get('/api/sheets/view', requireAuth, (req, res) => {
+  const filename = req.query.file;
+  if (!filename) return res.status(400).send('Missing file parameter');
+  const safeName = path.basename(filename);
+  (async () => {
+    const buffer = await getStoredFileBuffer(safeName);
+    if (!buffer) return res.status(404).send('File not found');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) return res.status(404).send('Worksheet not found');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderSheetHtml(safeName, sheet));
   })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
