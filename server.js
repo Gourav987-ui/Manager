@@ -16,10 +16,19 @@ try {
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
 const USE_NETLIFY_BLOBS = Boolean(process.env.NETLIFY || process.env.NETLIFY_DEV || process.env.NETLIFY_BLOBS_CONTEXT);
+const netlifyBlobs = USE_NETLIFY_BLOBS ? require('@netlify/blobs') : null;
 let blobStore = null;
-if (USE_NETLIFY_BLOBS) {
-  const { getStore } = require('@netlify/blobs');
-  blobStore = getStore('testsheets');
+
+function getBlobStore() {
+  if (!USE_NETLIFY_BLOBS) return null;
+  if (!blobStore) {
+    try {
+      blobStore = netlifyBlobs.getStore('testsheets');
+    } catch (err) {
+      throw new Error(`Netlify Blobs not initialized: ${err.message || err}`);
+    }
+  }
+  return blobStore;
 }
 
 function loadMetadata() {
@@ -67,7 +76,8 @@ function listLocalFilenames() {
 
 async function listStoredFilenames() {
   if (!USE_NETLIFY_BLOBS) return listLocalFilenames();
-  const result = await blobStore.list();
+  const store = getBlobStore();
+  const result = await store.list();
   return (result?.blobs || [])
     .map((b) => b.key)
     .filter((key) => key.endsWith('.xlsx') || key.endsWith('.xls'));
@@ -87,13 +97,14 @@ async function listStoredFiles() {
       };
     });
   }
-  const list = await blobStore.list();
+  const store = getBlobStore();
+  const list = await store.list();
   const filenames = (list?.blobs || [])
     .map((b) => b.key)
     .filter((key) => key.endsWith('.xlsx') || key.endsWith('.xls'));
   const entries = await Promise.all(
     filenames.map(async (filename) => {
-      const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+      const metaResult = await store.getMetadata(filename).catch(() => null);
       const metadata = metaResult?.metadata || {};
       return {
         filename,
@@ -112,7 +123,8 @@ async function getStoredFileBuffer(filename) {
     if (!fs.existsSync(filePath)) return null;
     return fs.readFileSync(filePath);
   }
-  const data = await blobStore.get(filename, { type: 'arrayBuffer' });
+  const store = getBlobStore();
+  const data = await store.get(filename, { type: 'arrayBuffer' });
   if (!data) return null;
   return Buffer.from(data);
 }
@@ -122,7 +134,8 @@ async function storedFileExists(filename) {
     const filePath = path.join(TEST_SHEETS_PATH, filename);
     return fs.existsSync(filePath);
   }
-  const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+  const store = getBlobStore();
+  const metaResult = await store.getMetadata(filename).catch(() => null);
   return Boolean(metaResult);
 }
 
@@ -135,7 +148,8 @@ async function saveStoredFile(filename, buffer, ownerEmail) {
     saveMetadata(meta);
     return;
   }
-  await blobStore.set(filename, buffer, {
+  const store = getBlobStore();
+  await store.set(filename, buffer, {
     metadata: {
       ownerEmail: ownerEmail || 'guest@local',
       size: buffer.length,
@@ -153,7 +167,8 @@ async function deleteStoredFile(filename) {
     saveMetadata(meta);
     return;
   }
-  await blobStore.delete(filename);
+  const store = getBlobStore();
+  await store.delete(filename);
 }
 
 async function renameStoredFile(oldName, newName, ownerEmail) {
@@ -168,13 +183,14 @@ async function renameStoredFile(oldName, newName, ownerEmail) {
     saveMetadata(meta);
     return { ownerEmail: nextOwner };
   }
-  const data = await blobStore.get(oldName, { type: 'arrayBuffer' });
+  const store = getBlobStore();
+  const data = await store.get(oldName, { type: 'arrayBuffer' });
   if (!data) return { ownerEmail: ownerEmail || 'guest@local' };
-  const metaResult = await blobStore.getMetadata(oldName).catch(() => null);
+  const metaResult = await store.getMetadata(oldName).catch(() => null);
   const metadata = metaResult?.metadata || {};
   const buffer = Buffer.from(data);
   const nextOwner = metadata.ownerEmail || ownerEmail || 'guest@local';
-  await blobStore.set(newName, buffer, {
+  await store.set(newName, buffer, {
     metadata: {
       ...metadata,
       ownerEmail: nextOwner,
@@ -182,7 +198,7 @@ async function renameStoredFile(oldName, newName, ownerEmail) {
       updatedAt: new Date().toISOString(),
     },
   });
-  await blobStore.delete(oldName);
+  await store.delete(oldName);
   return { ownerEmail: nextOwner };
 }
 
@@ -191,7 +207,8 @@ async function getStoredOwnerEmail(filename) {
     const meta = loadMetadata();
     return meta[filename] || null;
   }
-  const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+  const store = getBlobStore();
+  const metaResult = await store.getMetadata(filename).catch(() => null);
   return metaResult?.metadata?.ownerEmail || null;
 }
 
