@@ -11,6 +11,7 @@
 </head>
 <body>
   <aside class="left-tab" id="leftTab">
+    <button type="button" class="create-testsheet-btn" id="createTestSheetBtn">Create Testcase Sheet</button>
     <div class="settings-bottom">
       <button type="button" class="settings-btn" id="settingsBtn" title="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -47,15 +48,20 @@
         <div class="search-wrap">
           <input type="text" id="search" placeholder="Filter by ticket or filename..." autocomplete="off">
         </div>
-        <div class="bulk-actions" id="bulkActions" hidden>
-          <button type="button" class="btn btn-download" id="bulkDownload" title="Download selected"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
-          <button type="button" class="btn btn-delete" id="bulkDelete" title="Delete selected">Delete</button>
+        <div class="bulk-actions" id="bulkActions">
+          <button type="button" class="btn btn-download" id="bulkDownload" title="Download selected" disabled><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+          <button type="button" class="btn btn-delete" id="bulkDelete" title="Delete selected" disabled>Delete</button>
         </div>
         <label class="upload-btn">
           <input type="file" id="fileInput" accept=".xlsx,.xls" multiple hidden>
           <span>Upload sheets</span>
         </label>
-        <button type="button" class="refresh-btn" id="refresh" title="Refresh">↻</button>
+        <button type="button" class="btn btn-rename" id="bulkRename" title="Edit filename" aria-label="Edit filename" disabled>
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z"></path>
+          </svg>
+        </button>
       </div>
 
       <div class="table-wrap">
@@ -68,10 +74,11 @@
               <th>Modified</th>
               <th>Size</th>
               <th>Action</th>
+              <th>Owner</th>
             </tr>
           </thead>
           <tbody id="sheetsBody">
-            <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+            <tr class="empty-row"><td colspan="7">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -82,8 +89,48 @@
       </div>
     </main>
   </div>
+  <dialog class="create-testsheet-dialog" id="createTestSheetDialog">
+    <div class="dialog-header">
+      <h2>Create Testcase Sheet</h2>
+      <button type="button" class="dialog-close" id="createDialogClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="dialog-message">Enter Jira ticket key to create a test case sheet.</p>
+      <div class="form-group">
+        <label for="jiraTicketKey">Jira Ticket Key</label>
+        <input type="text" id="jiraTicketKey" placeholder="e.g. INVST-123" autocomplete="off">
+      </div>
+      <p class="dialog-error" id="createDialogError" hidden></p>
+    </div>
+    <div class="dialog-footer">
+      <button type="button" class="btn btn-cancel" id="createDialogCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="createDialogSubmit">Create</button>
+    </div>
+  </dialog>
+  <dialog class="create-testsheet-dialog rename-dialog" id="renameDialog">
+    <div class="dialog-header">
+      <h2>Edit Filename</h2>
+      <button type="button" class="dialog-close" id="renameDialogClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="dialog-message">Update the filename for the selected sheet.</p>
+      <div class="form-group">
+        <label for="renameFilenameInput">Filename</label>
+        <input type="text" id="renameFilenameInput" autocomplete="off">
+      </div>
+      <p class="dialog-error" id="renameDialogError" hidden></p>
+    </div>
+    <div class="dialog-footer">
+      <button type="button" class="btn btn-cancel" id="renameDialogCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="renameDialogSave">Save</button>
+    </div>
+  </dialog>
+  <div class="toast-popup" id="toastPopup" hidden>
+    <span class="toast-message">New card created: <strong id="toastFilename"></strong></span>
+  </div>
   <div class="avatar-backdrop" id="avatarBackdrop" hidden></div>
   <div class="avatar-dropdown" id="avatarDropdown" hidden>
+    <span class="avatar-dropdown-name" id="userName"></span>
     <span class="avatar-dropdown-email" id="userEmail">—</span>
     <button type="button" class="logout-btn" id="logout">Logout</button>
   </div>

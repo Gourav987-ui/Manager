@@ -84,13 +84,34 @@
   font-size: 0.95rem;
 }
 
+.login-form #email,
+.login-form #email:-webkit-autofill,
+.login-form #email:-webkit-autofill:hover,
+.login-form #email:-webkit-autofill:focus {
+  background: var(--bg) !important;
+  box-shadow: 0 0 0 1000px var(--bg) inset;
+}
+
+.login-form #email::placeholder,
+.login-form #email::-webkit-input-placeholder,
+.login-form #email::-moz-placeholder,
+.login-form #password::placeholder,
+.login-form #password::-webkit-input-placeholder,
+.login-form #password::-moz-placeholder {
+  color: #8b9eb5 !important;
+  -webkit-text-fill-color: #8b9eb5 !important;
+  opacity: 1;
+}
+
+.login-form #email:not(:placeholder-shown),
+.login-form #email:-webkit-autofill:not(:placeholder-shown) {
+  -webkit-text-fill-color: var(--text);
+  color: var(--text);
+}
+
 .login-form input:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-.login-form input::placeholder {
-  color: var(--text-muted);
 }
 
 .remember-wrap {

@@ -17,28 +17,36 @@ function getSavedPasswords() {
   }
 }
 
-function savePassword(email, password) {
-  const saved = getSavedPasswords();
-  saved[email.toLowerCase()] = password;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+function getSavedEmails() {
+  return Object.keys(getSavedPasswords());
 }
+
+function populateSavedEmails() {
+  const datalist = document.getElementById('savedEmails');
+  if (!datalist) return;
+  datalist.innerHTML = '';
+  getSavedEmails().forEach((email) => {
+    const opt = document.createElement('option');
+    opt.value = email;
+    datalist.appendChild(opt);
+  });
+}
+
+populateSavedEmails();
+emailInput?.addEventListener('focus', populateSavedEmails);
 
 emailInput?.addEventListener('input', () => {
   const email = emailInput.value.trim().toLowerCase();
   if (!email) return;
   const saved = getSavedPasswords();
-  if (saved[email]) {
-    passwordInput.value = saved[email];
-  }
+  if (saved[email]) passwordInput.value = saved[email];
 });
 
 emailInput?.addEventListener('blur', () => {
   const email = emailInput.value.trim().toLowerCase();
   if (!email) return;
   const saved = getSavedPasswords();
-  if (saved[email]) {
-    passwordInput.value = saved[email];
-  }
+  if (saved[email]) passwordInput.value = saved[email];
 });
 
 passwordToggle?.addEventListener('click', () => {
@@ -81,8 +89,11 @@ form.addEventListener('submit', async (e) => {
     }
 
     if (rememberCheckbox?.checked) {
-      savePassword(emailInput.value.trim().toLowerCase(), passwordInput.value);
+      const saved = getSavedPasswords();
+      saved[emailInput.value.trim().toLowerCase()] = passwordInput.value;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
     }
+    populateSavedEmails();
 
     window.location.href = '/';
   } catch (err) {

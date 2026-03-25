@@ -5,17 +5,362 @@ const path = require('path');
 const fs = require('fs');
 const session = require('express-session');
 const archiver = require('archiver');
+const ExcelJS = require('exceljs');
 
 const config = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')
 );
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
+const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
+
+function loadMetadata() {
+  try {
+    const data = fs.readFileSync(METADATA_PATH, 'utf8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+function saveMetadata(data) {
+  fs.writeFileSync(METADATA_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function emailToName(email) {
+  if (!email || typeof email !== 'string') return null;
+  const local = email.split('@')[0] || '';
+  const parts = local
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+  if (parts.length === 0) return null;
+  const seen = new Set();
+  const unique = [];
+  parts.forEach((part) => {
+    const key = part.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(part);
+  });
+  return unique.join(' ');
+}
 const PORT = config.port || 3456;
 const USERS = config.auth?.users || { 'admin@example.com': 'admin123' };
 const AUTH_DISABLED = !!config.auth?.disabled;
 
 if (!fs.existsSync(TEST_SHEETS_PATH)) {
   fs.mkdirSync(TEST_SHEETS_PATH, { recursive: true });
+}
+
+/** If a file with the same name already exists (case-insensitive), returns that on-disk name; otherwise null. */
+function findExistingFilenameConflict(desiredName) {
+  const files = fs.readdirSync(TEST_SHEETS_PATH);
+  const lower = desiredName.toLowerCase();
+  return files.find((f) => f.toLowerCase() === lower) || null;
+}
+
+function duplicateFileError(conflictName) {
+  return `Duplicate file present: "${conflictName}" already exists. Delete or rename the existing file first.`;
+}
+
+const QA_NAME = config.qaName || 'Gourav Singh';
+const SHEET_HEADERS = ['Test case', 'Expected Result', 'Actual Result', 'Status', 'Message', "Developer's Remark", 'Bug Rating'];
+
+function normalizeDisplayName(name) {
+  const parts = String(name || '')
+    .split(/[\s.]+/)
+    .map(p => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return '';
+  const seen = new Set();
+  const unique = [];
+  parts.forEach((part) => {
+    const key = part.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(part);
+  });
+  return unique.join(' ');
+}
+
+function getJiraSettings() {
+  const jira = config.jira || {};
+  return {
+    domain: process.env.JIRA_DOMAIN || jira.domain,
+    email: process.env.JIRA_EMAIL || jira.email,
+    apiToken: process.env.JIRA_API_TOKEN || jira.apiToken,
+  };
+}
+
+function sanitizeFilenameComponent(value) {
+  if (!value) return 'Manual_Test_Cases';
+  const cleaned = value.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim();
+  return cleaned || 'Manual_Test_Cases';
+}
+
+function htmlToText(html) {
+  if (!html) return '';
+  let text = String(html);
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/<\/p>/gi, '\n');
+  text = text.replace(/<\/li>/gi, '\n');
+  text = text.replace(/<li>/gi, '- ');
+  text = text.replace(/<\/h\d>/gi, '\n');
+  text = text.replace(/<[^>]*>/g, '');
+  const entities = {
+    '&nbsp;': ' ',
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'",
+  };
+  Object.entries(entities).forEach(([k, v]) => {
+    text = text.replace(new RegExp(k, 'g'), v);
+  });
+  return text;
+}
+
+function adfToText(node) {
+  if (!node) return '';
+  if (Array.isArray(node)) return node.map(adfToText).join('');
+  if (typeof node === 'string') return node;
+  const content = node.content ? node.content.map(adfToText).join('') : '';
+  switch (node.type) {
+    case 'text':
+      return node.text || '';
+    case 'hardBreak':
+      return '\n';
+    case 'paragraph':
+    case 'heading':
+      return `${content}\n`;
+    case 'listItem':
+      return `- ${content}\n`;
+    case 'bulletList':
+    case 'orderedList':
+      return `${content}\n`;
+    default:
+      return content;
+  }
+}
+
+function normalizeText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractAcceptanceCriteria(text) {
+  if (!text) return [];
+  const lines = String(text).split(/\r?\n/);
+  const startIndex = lines.findIndex((l) => /acceptance criteria|^ac\b/i.test(l.trim()));
+  if (startIndex === -1) return [];
+  const results = [];
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (i === startIndex) {
+      const remainder = line.replace(/acceptance criteria/i, '').replace(/^[:\-\s]+/, '').trim();
+      if (remainder && !/^[#]+$/.test(remainder)) results.push(remainder);
+      continue;
+    }
+    if (!line && results.length > 0) break;
+    if (/^(#+\s+|[A-Z][A-Za-z\s]+:)$/.test(line) && results.length > 0) break;
+    if (!line) continue;
+    results.push(line);
+  }
+  return results
+    .map((l) => l.replace(/^[-*•\d.\)\s]+/, '').trim())
+    .filter(Boolean);
+}
+
+function detectFeatureFlag(text) {
+  const raw = String(text || '');
+  if (!/(feature flag|feature-flag|flag on|flag off|when enabled|when disabled|flagged)/i.test(raw)) {
+    return { hasFlag: false, name: null };
+  }
+  const ignore = new Set(['on', 'off', 'enabled', 'disabled', 'feature', 'flag']);
+  const candidates = [];
+  const regexes = [
+    /feature flag[:\s]*`?([a-z0-9_-]{3,})`?/gi,
+    /flag[:\s]*`?([a-z0-9_-]{3,})`?/gi,
+    /`([a-z0-9_-]{3,})`/gi,
+  ];
+  regexes.forEach((rgx) => {
+    let match;
+    while ((match = rgx.exec(raw)) !== null) {
+      const candidate = match[1];
+      if (candidate && !ignore.has(candidate.toLowerCase())) {
+        candidates.push(candidate);
+      }
+    }
+  });
+  return { hasFlag: true, name: candidates[0] || null };
+}
+
+function caseTitleFromText(text) {
+  const cleaned = String(text || '')
+    .replace(/^[^a-zA-Z0-9]+/, '')
+    .replace(/\.+$/, '')
+    .trim();
+  if (!cleaned) return 'Test case';
+  const words = cleaned.split(/\s+/).slice(0, 8);
+  return words.join(' ');
+}
+
+function expectedFromText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return 'Action should complete successfully.';
+  if (/\bshould\b/i.test(trimmed) || /\bwould\b/i.test(trimmed)) return trimmed;
+  if (/\bmust\b/i.test(trimmed)) return trimmed.replace(/\bmust\b/i, 'should');
+  if (/\bwill\b/i.test(trimmed)) return trimmed.replace(/\bwill\b/i, 'should');
+  return `Result should be: ${trimmed}`;
+}
+
+function dedupeCases(cases) {
+  const seen = new Set();
+  return cases.filter((c) => {
+    const key = String(c.name || '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function coverageCases(summary, flagLabel, state) {
+  const suffix = flagLabel ? ` when ${flagLabel} is ${state}` : '';
+  const label = summary || 'feature';
+  return [
+    {
+      name: `Reject invalid input for ${label}`,
+      expected: `Invalid input should be rejected with a clear error message${suffix}.`,
+    },
+    {
+      name: `Handle missing data for ${label}`,
+      expected: `Missing data should be handled gracefully${suffix}.`,
+    },
+    {
+      name: `Verify logging for ${label}`,
+      expected: `Relevant logs should be recorded${suffix}.`,
+    },
+  ];
+}
+
+function defaultCases(summary) {
+  const label = summary || 'feature';
+  return [
+    {
+      name: `Verify ${label} happy path`,
+      expected: `${label} should work for valid inputs.`,
+    },
+    {
+      name: `Reject invalid input for ${label}`,
+      expected: 'Invalid input should be rejected with a clear error message.',
+    },
+    {
+      name: `Handle missing data for ${label}`,
+      expected: 'Missing data should be handled gracefully.',
+    },
+    {
+      name: `Process multiple items for ${label}`,
+      expected: 'Multiple items should be handled without errors.',
+    },
+    {
+      name: `Verify logging for ${label}`,
+      expected: `Relevant logs should be recorded for ${label} actions.`,
+    },
+    {
+      name: `Retry ${label} after failure`,
+      expected: `${label} should recover or allow retry after failure.`,
+    },
+  ];
+}
+
+function buildTestCases(summary, acceptanceCriteria, featureFlag) {
+  const acCases = acceptanceCriteria.map((ac) => ({
+    name: caseTitleFromText(ac),
+    expected: expectedFromText(ac),
+  }));
+  if (!featureFlag?.hasFlag) {
+    const base = acCases.length > 0 ? acCases.concat(coverageCases(summary)) : defaultCases(summary);
+    return { cases: dedupeCases(base) };
+  }
+  const flagLabel = featureFlag.name ? `the "${featureFlag.name}" flag` : 'the feature flag';
+  const onCases = acCases.length > 0
+    ? acCases.concat(coverageCases(summary, flagLabel, 'ON'))
+    : [
+      {
+        name: `Verify new behavior for ${summary || 'feature'}`,
+        expected: `New behavior should apply when ${flagLabel} is ON.`,
+      },
+      ...coverageCases(summary, flagLabel, 'ON'),
+    ];
+  const offCases = [
+    {
+      name: `Verify legacy behavior for ${summary || 'feature'}`,
+      expected: `Legacy behavior should remain unchanged when ${flagLabel} is OFF.`,
+    },
+    ...coverageCases(summary, flagLabel, 'OFF'),
+  ];
+  return {
+    flagOffCases: dedupeCases(offCases),
+    flagOnCases: dedupeCases(onCases),
+  };
+}
+
+function applyRowStyle(row, isBold) {
+  for (let col = 1; col <= 7; col += 1) {
+    const cell = row.getCell(col);
+    cell.alignment = { wrapText: true, horizontal: 'left', vertical: 'center' };
+    if (isBold) cell.font = { bold: true };
+  }
+}
+
+function addHeaderRow(sheet, rowNumber) {
+  const row = sheet.getRow(rowNumber);
+  SHEET_HEADERS.forEach((header, index) => {
+    row.getCell(index + 1).value = header;
+  });
+  applyRowStyle(row, true);
+}
+
+function addTestCaseRow(sheet, rowNumber, testCase) {
+  const row = sheet.getRow(rowNumber);
+  row.getCell(1).value = testCase.name;
+  row.getCell(2).value = testCase.expected;
+  applyRowStyle(row, false);
+}
+
+async function fetchJiraIssue(key) {
+  const jira = getJiraSettings();
+  if (!jira.email || !jira.apiToken || !jira.domain) {
+    return {
+      ok: false,
+      error: 'Jira configuration is required. Set jira.email, jira.apiToken, and jira.domain in config.json or provide JIRA_EMAIL, JIRA_API_TOKEN, and JIRA_DOMAIN env vars.',
+    };
+  }
+  const auth = Buffer.from(`${jira.email}:${jira.apiToken}`).toString('base64');
+  const url = `https://${jira.domain}/rest/api/3/issue/${encodeURIComponent(
+    key
+  )}?fields=summary,description,assignee,issuetype&expand=renderedFields`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json',
+      },
+    });
+    if (r.status === 404) return { ok: false, error: `Ticket ${key} does not exist` };
+    if (r.status === 403) return { ok: false, error: `No access to ticket ${key}` };
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => ({}));
+      return { ok: false, error: errBody.errorMessages?.[0] || `Jira error: ${r.status}` };
+    }
+    const data = await r.json();
+    return { ok: true, issue: data };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Failed to reach Jira' };
+  }
 }
 
 const app = express();
@@ -63,16 +408,15 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  if (AUTH_DISABLED) return res.json({ email: 'guest@local' });
-  if (req.session?.email) return res.json({ email: req.session.email });
+  if (AUTH_DISABLED) return res.json({ email: 'guest@local', name: null });
+  if (req.session?.email) {
+    const name = emailToName(req.session.email);
+    return res.json({ email: req.session.email, name });
+  }
   res.status(401).json({ error: 'Not authenticated' });
 });
 
-const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, TEST_SHEETS_PATH),
-  filename: (_, file, cb) => cb(null, file.originalname),
-});
-const upload = multer({ storage });
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.get('/api/sheets', requireAuth, (req, res) => {
   try {
@@ -82,11 +426,17 @@ app.get('/api/sheets', requireAuth, (req, res) => {
         const fullPath = path.join(TEST_SHEETS_PATH, filename);
         const stats = fs.statSync(fullPath);
         const ticketMatch = filename.match(/^([A-Z]+-\d+)/);
+        const meta = loadMetadata();
+        const ownerEmail = meta[filename];
+        const owner = ownerEmail ? emailToName(ownerEmail) : null;
+        const ownedByMe = !ownerEmail || ownerEmail === req.session?.email;
         return {
           filename,
           ticketKey: ticketMatch ? ticketMatch[1] : null,
           size: stats.size,
           modified: stats.mtime.toISOString(),
+          owner,
+          ownedByMe,
         };
       })
       .sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -134,15 +484,198 @@ app.get('/api/sheets/open', requireAuth, (req, res) => {
 
 app.post('/api/sheets/upload', requireAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ filename: req.file.filename, success: true });
+  const safeName = path.basename(req.file.originalname);
+  if (safeName !== req.file.originalname) return res.status(400).json({ error: 'Invalid filename' });
+  const conflictName = findExistingFilenameConflict(safeName);
+  if (conflictName) {
+    return res.status(409).json({
+      error: duplicateFileError(conflictName),
+    });
+  }
+  const filePath = path.join(TEST_SHEETS_PATH, safeName);
+  fs.writeFileSync(filePath, req.file.buffer);
+  const meta = loadMetadata();
+  meta[safeName] = req.session?.email || 'guest@local';
+  saveMetadata(meta);
+  res.json({ filename: safeName, success: true });
+});
+
+app.post('/api/sheets/create-from-ticket', requireAuth, async (req, res) => {
+  const { ticketKey } = req.body || {};
+  const key = String(ticketKey || '').trim().toUpperCase();
+  if (!key || !/^[A-Z]+-\d+$/.test(key)) {
+    return res.status(400).json({ error: 'Valid Jira ticket key required (e.g. INVST-123)' });
+  }
+  const issueResult = await fetchJiraIssue(key);
+  if (!issueResult.ok) {
+    return res.status(400).json({ error: issueResult.error });
+  }
+  const issue = issueResult.issue || {};
+  const summary = issue.fields?.summary?.trim() || key;
+  const safeSummary = sanitizeFilenameComponent(summary);
+  const filename = `${key}_${safeSummary}.xlsx`;
+  const conflictName = findExistingFilenameConflict(filename);
+  if (conflictName) {
+    return res.status(409).json({
+      error: duplicateFileError(conflictName),
+    });
+  }
+  const filePath = path.join(TEST_SHEETS_PATH, filename);
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('ManualTests', { views: [{ state: 'frozen', ySplit: 3 }] });
+    sheet.columns = [
+      { width: 60 },
+      { width: 55 },
+      { width: 25 },
+      { width: 15 },
+      { width: 30 },
+      { width: 25 },
+      { width: 15 },
+    ];
+    const jiraDomain = getJiraSettings().domain || 'orion-advisor.atlassian.net';
+    const ticketUrl = `https://${jiraDomain}/browse/${key}`;
+    const developerName = issue.fields?.assignee?.displayName || '—';
+    const descriptionText = normalizeText(
+      issue.renderedFields?.description
+        ? htmlToText(issue.renderedFields.description)
+        : adfToText(issue.fields?.description)
+    );
+    const acceptanceCriteria = extractAcceptanceCriteria(descriptionText);
+    const featureFlag = detectFeatureFlag(descriptionText);
+    const cases = buildTestCases(summary, acceptanceCriteria, featureFlag);
+
+    const cellA1 = sheet.getCell('A1');
+    cellA1.value = { text: ticketUrl, hyperlink: ticketUrl };
+    cellA1.font = { bold: true };
+    cellA1.alignment = { wrapText: true, horizontal: 'left', vertical: 'center' };
+    const cellC1 = sheet.getCell('C1');
+    cellC1.value = `Developer: ${developerName}`;
+    cellC1.font = { bold: true };
+    cellC1.alignment = { wrapText: true, horizontal: 'left', vertical: 'center' };
+    const qaName = normalizeDisplayName(emailToName(req.session?.email)) || normalizeDisplayName(QA_NAME) || 'QA';
+    const cellE1 = sheet.getCell('E1');
+    cellE1.value = `QA - ${qaName}`;
+    cellE1.font = { bold: true };
+    cellE1.alignment = { wrapText: true, horizontal: 'left', vertical: 'center' };
+
+    let rowIndex = 3;
+    let caseNumber = 1;
+    applyRowStyle(sheet.getRow(2), false);
+
+    if (featureFlag.hasFlag) {
+      const flagOffRow = sheet.getRow(rowIndex);
+      flagOffRow.getCell(1).value = 'FLAG OFF';
+      applyRowStyle(flagOffRow, true);
+      rowIndex += 1;
+      addHeaderRow(sheet, rowIndex);
+      rowIndex += 1;
+      cases.flagOffCases.forEach((testCase) => {
+        addTestCaseRow(sheet, rowIndex, {
+          name: `TC${String(caseNumber).padStart(2, '0')} - ${testCase.name}`,
+          expected: testCase.expected,
+        });
+        caseNumber += 1;
+        rowIndex += 1;
+        applyRowStyle(sheet.getRow(rowIndex), false);
+        rowIndex += 1;
+      });
+
+      const flagOnRow = sheet.getRow(rowIndex);
+      flagOnRow.getCell(1).value = 'FLAG ON';
+      applyRowStyle(flagOnRow, true);
+      rowIndex += 1;
+      addHeaderRow(sheet, rowIndex);
+      rowIndex += 1;
+      cases.flagOnCases.forEach((testCase) => {
+        addTestCaseRow(sheet, rowIndex, {
+          name: `TC${String(caseNumber).padStart(2, '0')} - ${testCase.name}`,
+          expected: testCase.expected,
+        });
+        caseNumber += 1;
+        rowIndex += 1;
+        applyRowStyle(sheet.getRow(rowIndex), false);
+        rowIndex += 1;
+      });
+    } else {
+      addHeaderRow(sheet, rowIndex);
+      rowIndex += 1;
+      cases.cases.forEach((testCase) => {
+        addTestCaseRow(sheet, rowIndex, {
+          name: `TC${String(caseNumber).padStart(2, '0')} - ${testCase.name}`,
+          expected: testCase.expected,
+        });
+        caseNumber += 1;
+        rowIndex += 1;
+        applyRowStyle(sheet.getRow(rowIndex), false);
+        rowIndex += 1;
+      });
+    }
+    fs.writeFileSync(filePath, await workbook.xlsx.writeBuffer());
+    const meta = loadMetadata();
+    meta[filename] = req.session?.email || 'guest@local';
+    saveMetadata(meta);
+    res.json({ filename, success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sheets/rename', requireAuth, (req, res) => {
+  const { oldFilename, newFilename } = req.body || {};
+  if (!oldFilename || !newFilename) {
+    return res.status(400).json({ error: 'Old and new filenames are required' });
+  }
+  const oldName = path.basename(String(oldFilename));
+  const newName = path.basename(String(newFilename));
+  if (oldName !== oldFilename || newName !== newFilename) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+  if (oldName === newName) {
+    return res.status(400).json({ error: 'New filename must be different' });
+  }
+  if (!newName.endsWith('.xlsx') && !newName.endsWith('.xls')) {
+    return res.status(400).json({ error: 'Filename must end with .xlsx or .xls' });
+  }
+  const oldPath = path.join(TEST_SHEETS_PATH, oldName);
+  if (!fs.existsSync(oldPath)) return res.status(404).json({ error: 'File not found' });
+
+  const meta = loadMetadata();
+  const ownerEmail = meta[oldName];
+  if (ownerEmail && ownerEmail !== req.session?.email) {
+    return res.status(403).json({ error: 'You can only rename files you uploaded' });
+  }
+
+  const conflictName = findExistingFilenameConflict(newName);
+  if (conflictName && conflictName.toLowerCase() !== oldName.toLowerCase()) {
+    return res.status(409).json({ error: duplicateFileError(conflictName) });
+  }
+  if (conflictName && conflictName.toLowerCase() === oldName.toLowerCase()) {
+    return res.status(400).json({ error: 'New filename differs only by case' });
+  }
+
+  const newPath = path.join(TEST_SHEETS_PATH, newName);
+  fs.renameSync(oldPath, newPath);
+  const nextOwner = ownerEmail || req.session?.email || 'guest@local';
+  delete meta[oldName];
+  meta[newName] = nextOwner;
+  saveMetadata(meta);
+  res.json({ success: true, filename: newName });
 });
 
 app.delete('/api/sheets/:filename', requireAuth, (req, res) => {
   const filename = path.basename(req.params.filename);
   if (filename !== req.params.filename) return res.status(400).json({ error: 'Invalid filename' });
+  const meta = loadMetadata();
+  const ownerEmail = meta[filename];
+  if (ownerEmail && ownerEmail !== req.session?.email) {
+    return res.status(403).json({ error: 'You can only delete files you uploaded' });
+  }
   const filePath = path.join(TEST_SHEETS_PATH, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
   fs.unlinkSync(filePath);
+  delete meta[filename];
+  saveMetadata(meta);
   res.json({ success: true });
 });
 

@@ -2,7 +2,13 @@ const API = '/api';
 const sheetsBody = document.getElementById('sheetsBody');
 const searchInput = document.getElementById('search');
 const fileInput = document.getElementById('fileInput');
-const refreshBtn = document.getElementById('refresh');
+const bulkRenameBtn = document.getElementById('bulkRename');
+const renameDialog = document.getElementById('renameDialog');
+const renameDialogClose = document.getElementById('renameDialogClose');
+const renameDialogCancel = document.getElementById('renameDialogCancel');
+const renameDialogSave = document.getElementById('renameDialogSave');
+const renameFilenameInput = document.getElementById('renameFilenameInput');
+const renameDialogError = document.getElementById('renameDialogError');
 const emptyState = document.getElementById('emptyState');
 const userAvatar = document.getElementById('userAvatar');
 const leftTab = document.getElementById('leftTab');
@@ -38,6 +44,114 @@ function setLeftTabWidth(pct) {
   });
 
   if (themeIcon) themeIcon.textContent = document.body.classList.contains('theme-light') ? '☀' : '☾';
+})();
+
+(function initCreateTestSheetDialog() {
+  const createBtn = document.getElementById('createTestSheetBtn');
+  const dialog = document.getElementById('createTestSheetDialog');
+  const closeBtn = document.getElementById('createDialogClose');
+  const cancelBtn = document.getElementById('createDialogCancel');
+  const submitBtn = document.getElementById('createDialogSubmit');
+  const jiraInput = document.getElementById('jiraTicketKey');
+  const errorText = document.getElementById('createDialogError');
+  const toastPopup = document.getElementById('toastPopup');
+  const toastFilename = document.getElementById('toastFilename');
+
+  if (!createBtn || !dialog) return;
+
+  createBtn.addEventListener('click', () => {
+    if (jiraInput) jiraInput.value = '';
+    if (errorText) errorText.hidden = true;
+    dialog.showModal();
+  });
+
+  function showDialogError(message) {
+    if (!errorText) return;
+    errorText.textContent = message;
+    errorText.hidden = false;
+  }
+
+  function clearDialogError() {
+    if (!errorText) return;
+    errorText.textContent = '';
+    errorText.hidden = true;
+  }
+
+  function closeDialog() {
+    clearDialogError();
+    dialog.close();
+  }
+
+  function showToast(filename) {
+    if (toastFilename) toastFilename.textContent = displayFilename(filename);
+    if (toastPopup) {
+      toastPopup.hidden = false;
+      setTimeout(() => {
+        toastPopup.hidden = true;
+      }, 4000);
+    }
+  }
+
+  function highlightRow(filename) {
+    const row = document.querySelector(`tr[data-filename="${filename}"]`);
+    if (row) {
+      row.classList.add('row-highlight-new');
+      setTimeout(() => row.classList.remove('row-highlight-new'), 10000);
+    }
+  }
+
+  closeBtn?.addEventListener('click', closeDialog);
+  cancelBtn?.addEventListener('click', () => {
+    closeDialog();
+    window.location.reload();
+  });
+
+  submitBtn?.addEventListener('click', async () => {
+    const key = jiraInput?.value?.trim();
+    if (!key) {
+      showDialogError('Please enter a Jira ticket key');
+      return;
+    }
+    try {
+      submitBtn.disabled = true;
+      clearDialogError();
+      const res = await fetch(`${API}/sheets/create-from-ticket`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticketKey: key }),
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      if (!res.ok) {
+        showDialogError(data.error || 'Failed to create sheet');
+        return;
+      }
+      closeDialog();
+      await fetchSheets();
+      if (data.filename) {
+        highlightRow(data.filename);
+        showToast(data.filename);
+      }
+    } catch (err) {
+      showDialogError('Failed to create sheet: ' + err.message);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  jiraInput?.addEventListener('input', clearDialogError);
+
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) closeDialog();
+  });
+
+  dialog.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDialog();
+  });
 })();
 
 (function initResize() {
@@ -157,21 +271,21 @@ function renderSheets(sheets) {
   if (filtered.length === 0) {
     sheetsBody.innerHTML = `
       <tr class="empty-row">
-        <td colspan="6">${allSheets.length === 0 ? 'No test sheets yet. Upload one to get started.' : 'No matches for your filter.'}</td>
+        <td colspan="7">${allSheets.length === 0 ? 'No test sheets yet. Upload one to get started.' : 'No matches for your filter.'}</td>
       </tr>
     `;
   } else {
     sheetsBody.innerHTML = filtered
       .map(
         (s) => `
-      <tr class="selectable-row" data-filename="${escapeHtml(s.filename)}">
-        <td class="td-checkbox"><input type="checkbox" class="row-select" data-filename="${escapeHtml(s.filename)}"></td>
+      <tr class="selectable-row" data-filename="${escapeHtml(s.filename)}" data-owned-by-me="${s.ownedByMe ? 'true' : 'false'}">
+        <td class="td-checkbox"><input type="checkbox" class="row-select" data-filename="${escapeHtml(s.filename)}" data-owned-by-me="${s.ownedByMe ? 'true' : 'false'}"></td>
         <td>
           ${s.ticketKey
             ? `<span class="ticket-badge"><a href="https://orion-advisor.atlassian.net/browse/${s.ticketKey}" target="_blank" rel="noopener">${s.ticketKey}</a></span>`
             : '<span class="no-ticket">—</span>'}
         </td>
-        <td><span class="filename">${escapeHtml(s.filename)}</span></td>
+        <td><span class="filename">${escapeHtml(displayFilename(s.filename))}</span></td>
         <td><span class="modified">${formatDate(s.modified)}</span></td>
         <td><span class="size">${formatSize(s.size)}</span></td>
         <td>
@@ -179,6 +293,7 @@ function renderSheets(sheets) {
             <a class="btn btn-open" href="${API}/sheets/open?file=${encodeURIComponent(s.filename)}" target="_blank">Open</a>
           </div>
         </td>
+        <td><span class="owner">${s.owner ? escapeHtml(s.owner) : '—'}</span></td>
       </tr>
     `
       )
@@ -196,16 +311,39 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
+function displayFilename(filename) {
+  if (!filename) return '';
+  return filename.replace(/\.(xlsx|xls)$/i, '');
+}
+
+function getSpreadsheetExtension(filename) {
+  const match = String(filename || '').match(/\.(xlsx|xls)$/i);
+  return match ? match[0] : '';
+}
+
 function getSelectedFilenames() {
   return Array.from(document.querySelectorAll('.row-select:checked')).map((cb) => cb.dataset.filename);
 }
 
 function updateBulkActions() {
-  const bulkActions = document.getElementById('bulkActions');
+  const bulkDownload = document.getElementById('bulkDownload');
+  const bulkDelete = document.getElementById('bulkDelete');
   const selectAll = document.getElementById('selectAll');
   const selected = getSelectedFilenames();
   const total = document.querySelectorAll('.row-select').length;
-  if (bulkActions) bulkActions.hidden = selected.length === 0;
+  const hasSelection = selected.length > 0;
+  const allSelectedOwnedByMe = hasSelection && Array.from(document.querySelectorAll('.row-select:checked')).every((cb) => cb.dataset.ownedByMe === 'true');
+  const selectedCheckboxes = Array.from(document.querySelectorAll('.row-select:checked'));
+  const canRename = selectedCheckboxes.length === 1 && selectedCheckboxes[0].dataset.ownedByMe === 'true';
+  if (bulkDownload) bulkDownload.disabled = !hasSelection;
+  if (bulkDelete) {
+    bulkDelete.disabled = !allSelectedOwnedByMe;
+    bulkDelete.title = allSelectedOwnedByMe ? 'Delete selected' : 'You can only delete files you uploaded';
+  }
+  if (bulkRenameBtn) {
+    bulkRenameBtn.disabled = !canRename;
+    bulkRenameBtn.title = canRename ? 'Edit filename' : 'Select one file you uploaded';
+  }
   if (selectAll) {
     selectAll.checked = total > 0 && selected.length === total;
     selectAll.indeterminate = selected.length > 0 && selected.length < total;
@@ -234,6 +372,70 @@ function bindSelectListeners() {
   });
   document.getElementById('bulkDownload')?.addEventListener('click', bulkDownload);
   document.getElementById('bulkDelete')?.addEventListener('click', bulkDelete);
+  bulkRenameBtn?.addEventListener('click', bulkRename);
+}
+
+function showRenameError(message) {
+  if (!renameDialogError) return;
+  renameDialogError.textContent = message;
+  renameDialogError.hidden = false;
+}
+
+function clearRenameError() {
+  if (!renameDialogError) return;
+  renameDialogError.textContent = '';
+  renameDialogError.hidden = true;
+}
+
+function openRenameDialog(oldFilename) {
+  if (!renameDialog || !renameFilenameInput) return;
+  renameDialog.dataset.oldFilename = oldFilename;
+  renameFilenameInput.value = displayFilename(oldFilename);
+  clearRenameError();
+  renameDialog.showModal();
+  renameFilenameInput.focus();
+}
+
+function closeRenameDialog() {
+  if (!renameDialog) return;
+  clearRenameError();
+  renameDialog.dataset.oldFilename = '';
+  renameDialog.close();
+}
+
+async function submitRename() {
+  if (!renameDialog || !renameFilenameInput) return;
+  const oldFilename = renameDialog.dataset.oldFilename;
+  if (!oldFilename) return;
+  let newFilename = renameFilenameInput.value.trim();
+  if (!newFilename) {
+    showRenameError('Filename cannot be empty');
+    return;
+  }
+  if (!/\.(xlsx|xls)$/i.test(newFilename)) {
+    const ext = getSpreadsheetExtension(oldFilename) || '.xlsx';
+    newFilename = `${newFilename}${ext}`;
+  }
+  if (newFilename === oldFilename) {
+    showRenameError('New filename must be different');
+    return;
+  }
+  if (renameDialogSave) renameDialogSave.disabled = true;
+  const res = await fetch(`${API}/sheets/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldFilename, newFilename }),
+    credentials: 'include',
+  }).then(checkAuth);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    showRenameError(data.error || 'Rename failed');
+    if (renameDialogSave) renameDialogSave.disabled = false;
+    return;
+  }
+  closeRenameDialog();
+  await fetchSheets();
+  if (renameDialogSave) renameDialogSave.disabled = false;
 }
 
 async function bulkDownload() {
@@ -261,6 +463,12 @@ async function bulkDownload() {
   URL.revokeObjectURL(a.href);
 }
 
+function bulkRename() {
+  const selected = getSelectedFilenames();
+  if (selected.length !== 1) return;
+  openRenameDialog(selected[0]);
+}
+
 async function bulkDelete() {
   const files = getSelectedFilenames();
   if (files.length === 0) return;
@@ -272,16 +480,6 @@ async function bulkDelete() {
     }).then(checkAuth);
     if (!res.ok) console.error('Delete failed:', f);
   }
-  await fetchSheets();
-}
-
-async function deleteSheet(filename) {
-  if (!confirm(`Delete "${filename}"?`)) return;
-  const res = await fetch(`${API}/sheets/${encodeURIComponent(filename)}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  }).then(checkAuth);
-  if (!res.ok) throw new Error('Delete failed');
   await fetchSheets();
 }
 
@@ -313,9 +511,22 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+renameDialogClose?.addEventListener('click', closeRenameDialog);
+renameDialogCancel?.addEventListener('click', closeRenameDialog);
+renameDialogSave?.addEventListener('click', submitRename);
+renameFilenameInput?.addEventListener('input', clearRenameError);
+renameFilenameInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitRename();
+});
+renameDialog?.addEventListener('click', (e) => {
+  if (e.target === renameDialog) closeRenameDialog();
+});
+renameDialog?.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeRenameDialog();
+});
+
 searchInput.addEventListener('input', () => renderSheets(allSheets));
 
-refreshBtn.addEventListener('click', () => fetchSheets().catch(console.error));
 
 fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
@@ -346,7 +557,14 @@ async function init() {
   }
 
   const userEmailEl = document.getElementById('userEmail');
+  const userNameEl = document.getElementById('userName');
   if (userEmailEl) userEmailEl.textContent = me.email || '—';
+  if (userNameEl) {
+    const name = me.name || (me.email && me.email !== 'guest@local'
+      ? me.email.split('@')[0].split(/[._\s-]+/).map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ')
+      : '');
+    userNameEl.textContent = name;
+  }
   const avatarInitialsEl = document.getElementById('avatarInitials');
   if (userAvatar && me.email) {
     userAvatar.title = me.email;
@@ -367,7 +585,7 @@ async function init() {
     const msg = err.message || 'Failed to load sheets';
     sheetsBody.innerHTML = `
       <tr class="empty-row">
-        <td colspan="6">Error: ${escapeHtml(msg)}. Make sure the server is running (local) or deployment is complete (Netlify).</td>
+        <td colspan="7">Error: ${escapeHtml(msg)}. Make sure the server is running (local) or deployment is complete (Netlify).</td>
       </tr>
     `;
   });

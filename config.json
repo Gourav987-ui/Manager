@@ -2,10 +2,17 @@
   "testSheetsPath": "D:\\TestSheetManager\\Testsheets",
   "port": 3457,
   "auth": {
-    "disabled": true,
+    "disabled": false,
     "users": {
       "gourav.singh@thecodeinsight.com": "CodeInsight@123",
       "jitesh.kumar@thecodeinsight.com": "admin@123"
     }
+  },
+  "qaName": "Gourav Singh",
+  "jira": {
+    "domain": "orion-advisor.atlassian.net",
+    "email": "your-jira-email@example.com",
+    "apiToken": "your-jira-api-token-from-id.atlassian.com",
+    "validateBeforeCreate": false
   }
 }
