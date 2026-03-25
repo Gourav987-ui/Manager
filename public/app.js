@@ -330,7 +330,7 @@ function renderSheets(sheets) {
         <td><span class="size">${formatSize(s.size)}</span></td>
         <td>
           <div class="actions">
-            <a class="btn btn-open" href="${API}/sheets/view?file=${encodeURIComponent(s.filename)}" target="_blank" rel="noopener">Open</a>
+            <a class="btn btn-open" href="${API}/sheets/google?file=${encodeURIComponent(s.filename)}" target="_blank" rel="noopener">Open</a>
           </div>
         </td>
         <td><span class="owner">${s.owner ? escapeHtml(s.owner) : '—'}</span></td>

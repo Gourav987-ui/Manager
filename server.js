@@ -90,6 +90,14 @@ function saveMetadata(data) {
   fs.writeFileSync(METADATA_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
+function getMetaEntry(meta, filename) {
+  const entry = meta[filename];
+  if (!entry) return {};
+  if (typeof entry === 'string') return { ownerEmail: entry };
+  if (typeof entry === 'object') return entry;
+  return {};
+}
+
 function emailToName(email) {
   if (!email || typeof email !== 'string') return null;
   const local = email.split('@')[0] || '';
@@ -137,11 +145,12 @@ async function listStoredFiles() {
     return listLocalFilenames().map((filename) => {
       const fullPath = path.join(TEST_SHEETS_PATH, filename);
       const stats = fs.statSync(fullPath);
+      const entry = getMetaEntry(meta, filename);
       return {
         filename,
         size: stats.size,
         modified: stats.mtime.toISOString(),
-        ownerEmail: meta[filename] || null,
+        ownerEmail: entry.ownerEmail || null,
       };
     });
   }
@@ -192,14 +201,20 @@ async function saveStoredFile(filename, buffer, ownerEmail) {
     const filePath = path.join(TEST_SHEETS_PATH, filename);
     fs.writeFileSync(filePath, buffer);
     const meta = loadMetadata();
-    meta[filename] = ownerEmail || 'guest@local';
+    const entry = getMetaEntry(meta, filename);
+    meta[filename] = {
+      ...entry,
+      ownerEmail: ownerEmail || entry.ownerEmail || 'guest@local',
+    };
     saveMetadata(meta);
     return;
   }
   const store = getBlobStore();
+  const existing = await getStoredMetadata(filename);
   await store.set(filename, buffer, {
     metadata: {
-      ownerEmail: ownerEmail || 'guest@local',
+      ...existing,
+      ownerEmail: ownerEmail || existing.ownerEmail || 'guest@local',
       size: buffer.length,
       updatedAt: new Date().toISOString(),
     },
@@ -225,9 +240,10 @@ async function renameStoredFile(oldName, newName, ownerEmail) {
     const newPath = path.join(TEST_SHEETS_PATH, newName);
     fs.renameSync(oldPath, newPath);
     const meta = loadMetadata();
-    const nextOwner = meta[oldName] || ownerEmail || 'guest@local';
+    const entry = getMetaEntry(meta, oldName);
+    const nextOwner = entry.ownerEmail || ownerEmail || 'guest@local';
     delete meta[oldName];
-    meta[newName] = nextOwner;
+    meta[newName] = { ...entry, ownerEmail: nextOwner };
     saveMetadata(meta);
     return { ownerEmail: nextOwner };
   }
@@ -250,14 +266,40 @@ async function renameStoredFile(oldName, newName, ownerEmail) {
   return { ownerEmail: nextOwner };
 }
 
-async function getStoredOwnerEmail(filename) {
+async function getStoredMetadata(filename) {
   if (!USE_NETLIFY_BLOBS) {
     const meta = loadMetadata();
-    return meta[filename] || null;
+    return getMetaEntry(meta, filename);
   }
   const store = getBlobStore();
   const metaResult = await store.getMetadata(filename).catch(() => null);
-  return metaResult?.metadata?.ownerEmail || null;
+  return metaResult?.metadata || {};
+}
+
+async function setStoredMetadata(filename, updates) {
+  if (!USE_NETLIFY_BLOBS) {
+    const meta = loadMetadata();
+    const entry = getMetaEntry(meta, filename);
+    meta[filename] = { ...entry, ...updates };
+    saveMetadata(meta);
+    return;
+  }
+  const buffer = await getStoredFileBuffer(filename);
+  if (!buffer) return;
+  const store = getBlobStore();
+  const current = await getStoredMetadata(filename);
+  const next = {
+    ...current,
+    ...updates,
+    size: current.size || buffer.length,
+    updatedAt: current.updatedAt || new Date().toISOString(),
+  };
+  await store.set(filename, buffer, { metadata: next });
+}
+
+async function getStoredOwnerEmail(filename) {
+  const meta = await getStoredMetadata(filename);
+  return meta.ownerEmail || null;
 }
 
 /** If a file with the same name already exists (case-insensitive), returns that name; otherwise null. */
@@ -608,6 +650,75 @@ function renderSheetHtml(filename, sheet) {
 </html>`;
 }
 
+function getGoogleSettings() {
+  const google = config.google || {};
+  return {
+    clientId: process.env.GOOGLE_CLIENT_ID || google.clientId,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || google.clientSecret,
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN || google.refreshToken,
+  };
+}
+
+async function getGoogleAccessToken() {
+  const { clientId, clientSecret, refreshToken } = getGoogleSettings();
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error('Google integration not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN.');
+  }
+  const params = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    grant_type: 'refresh_token',
+  });
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error_description || data.error || 'Failed to obtain Google access token');
+  }
+  return data.access_token;
+}
+
+function stripSpreadsheetExtension(name) {
+  return String(name || '').replace(/\.(xlsx|xls)$/i, '');
+}
+
+async function uploadToGoogleSheets(filename, buffer) {
+  const accessToken = await getGoogleAccessToken();
+  const boundary = `----tsm-${Math.random().toString(36).slice(2)}`;
+  const metadata = JSON.stringify({
+    name: stripSpreadsheetExtension(filename),
+    mimeType: 'application/vnd.google-apps.spreadsheet',
+  });
+  const delimiter = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`;
+  const fileHeader = `--${boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`;
+  const close = `\r\n--${boundary}--`;
+  const body = Buffer.concat([
+    Buffer.from(delimiter, 'utf8'),
+    Buffer.from(fileHeader, 'utf8'),
+    buffer,
+    Buffer.from(close, 'utf8'),
+  ]);
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to upload to Google Drive');
+  }
+  const fileId = data.id;
+  const webViewLink = data.webViewLink || (fileId ? `https://docs.google.com/spreadsheets/d/${fileId}` : null);
+  return { fileId, webViewLink };
+}
+
 async function fetchJiraIssue(key) {
   const jira = getJiraSettings();
   if (!jira.email || !jira.apiToken || !jira.domain) {
@@ -777,6 +888,27 @@ app.get('/api/sheets/view', requireAuth, (req, res) => {
     if (!sheet) return res.status(404).send('Worksheet not found');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(renderSheetHtml(safeName, sheet));
+  })().catch((err) => res.status(500).json({ error: err.message }));
+});
+
+app.get('/api/sheets/google', requireAuth, (req, res) => {
+  const filename = req.query.file;
+  if (!filename) return res.status(400).send('Missing file parameter');
+  const safeName = path.basename(filename);
+  (async () => {
+    const buffer = await getStoredFileBuffer(safeName);
+    if (!buffer) return res.status(404).send('File not found');
+    const metadata = await getStoredMetadata(safeName);
+    if (metadata.googleFileId) {
+      const url = metadata.googleUrl || `https://docs.google.com/spreadsheets/d/${metadata.googleFileId}`;
+      return res.redirect(url);
+    }
+    const { fileId, webViewLink } = await uploadToGoogleSheets(safeName, buffer);
+    if (fileId) {
+      await setStoredMetadata(safeName, { googleFileId: fileId, googleUrl: webViewLink || null });
+    }
+    if (!webViewLink) return res.status(500).json({ error: 'Google Sheets link not available' });
+    res.redirect(webViewLink);
   })().catch((err) => res.status(500).json({ error: err.message }));
 });
 

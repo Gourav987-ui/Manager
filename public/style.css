@@ -244,15 +244,18 @@ body {
 }
 
 .settings-btn {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 100%;
+  min-height: 2.5rem;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-muted);
+  font-size: 0.9rem;
   cursor: pointer;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
@@ -266,6 +269,11 @@ body {
 .settings-btn svg {
   width: 1.25rem;
   height: 1.25rem;
+  flex-shrink: 0;
+}
+
+.settings-label {
+  font-weight: 600;
 }
 
 .settings-panel {
@@ -386,6 +394,7 @@ body.theme-light {
   font-weight: 500;
   color: var(--text);
   padding-bottom: 0.15rem;
+  text-align: right;
 }
 
 .avatar-dropdown-email {
@@ -419,7 +428,7 @@ body.theme-light {
 .logout-btn {
   display: block;
   width: 100%;
-  padding: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
   margin-left: 0;
   background: transparent;
   border: none;
@@ -427,8 +436,14 @@ body.theme-light {
   color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
-  text-align: left;
+  text-align: right;
   transition: background 0.2s;
+}
+
+.logout-icon {
+  margin-right: 0.35rem;
+  font-size: 0.95rem;
+  vertical-align: middle;
 }
 
 .logout-btn:hover {

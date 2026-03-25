@@ -11,8 +11,8 @@
   "qaName": "Gourav Singh",
   "jira": {
     "domain": "orion-advisor.atlassian.net",
-    "email": "your-jira-email@example.com",
-    "apiToken": "your-jira-api-token-from-id.atlassian.com",
+    "email": "gourav.singh@thecodeinsight.com",
+    "apiToken": "ATATT3xFfGF0P9w7eRMELa97umuOngD6hPm21bxQzIagEpJe0Kgpo6LOC1iLYsQVIc0XxlLkl4L3c8qnN_zPz0Hkpd1KxV2gmqUVju4gFeoQpbWyxuyN-w-kUcznXUo8H7d9CW7W3krCx82dfhnadSN0reybImld7zUp9tn0kqCBAq1TLm8l-4s=5B7723B1__",
     "validateBeforeCreate": false
   }
 }
