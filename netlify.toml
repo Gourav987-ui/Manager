@@ -5,6 +5,10 @@
 [build.environment]
   NODE_VERSION = "18"
 
+[functions]
+  directory = "netlify/functions"
+  included_files = ["config.json"]
+
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
