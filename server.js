@@ -7,9 +7,12 @@ const session = require('express-session');
 const archiver = require('archiver');
 const ExcelJS = require('exceljs');
 
-const config = JSON.parse(
-  fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')
-);
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+} catch {
+  config = {};
+}
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
 const USE_NETLIFY_BLOBS = Boolean(process.env.NETLIFY || process.env.NETLIFY_DEV || process.env.NETLIFY_BLOBS_CONTEXT);
