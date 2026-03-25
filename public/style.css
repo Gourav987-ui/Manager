@@ -90,6 +90,7 @@ body {
   justify-content: space-between;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
+  cursor: move;
 }
 
 .dialog-header h2 {

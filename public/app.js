@@ -54,6 +54,7 @@ function setLeftTabWidth(pct) {
   const submitBtn = document.getElementById('createDialogSubmit');
   const jiraInput = document.getElementById('jiraTicketKey');
   const errorText = document.getElementById('createDialogError');
+  const dialogHeader = dialog?.querySelector('.dialog-header');
   const toastPopup = document.getElementById('toastPopup');
   const toastFilename = document.getElementById('toastFilename');
 
@@ -152,6 +153,45 @@ function setLeftTabWidth(pct) {
   dialog.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeDialog();
   });
+
+  (function enableDialogDrag() {
+    if (!dialog || !dialogHeader) return;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+
+    function onMove(e) {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      dialog.style.left = `${startLeft + dx}px`;
+      dialog.style.top = `${startTop + dy}px`;
+    }
+
+    function onUp() {
+      dragging = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+
+    dialogHeader.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return;
+      if (!dialog.open) return;
+      const rect = dialog.getBoundingClientRect();
+      dialog.style.left = `${rect.left}px`;
+      dialog.style.top = `${rect.top}px`;
+      dialog.style.transform = 'none';
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      dragging = true;
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  })();
 })();
 
 (function initResize() {
