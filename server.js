@@ -12,6 +12,12 @@ const config = JSON.parse(
 );
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
+const USE_NETLIFY_BLOBS = Boolean(process.env.NETLIFY || process.env.NETLIFY_DEV || process.env.NETLIFY_BLOBS_CONTEXT);
+let blobStore = null;
+if (USE_NETLIFY_BLOBS) {
+  const { getStore } = require('@netlify/blobs');
+  blobStore = getStore('testsheets');
+}
 
 function loadMetadata() {
   try {
@@ -48,13 +54,147 @@ const PORT = config.port || 3456;
 const USERS = config.auth?.users || { 'admin@example.com': 'admin123' };
 const AUTH_DISABLED = !!config.auth?.disabled;
 
-if (!fs.existsSync(TEST_SHEETS_PATH)) {
+if (!USE_NETLIFY_BLOBS && !fs.existsSync(TEST_SHEETS_PATH)) {
   fs.mkdirSync(TEST_SHEETS_PATH, { recursive: true });
 }
 
-/** If a file with the same name already exists (case-insensitive), returns that on-disk name; otherwise null. */
-function findExistingFilenameConflict(desiredName) {
-  const files = fs.readdirSync(TEST_SHEETS_PATH);
+function listLocalFilenames() {
+  return fs.readdirSync(TEST_SHEETS_PATH).filter((f) => f.endsWith('.xlsx') || f.endsWith('.xls'));
+}
+
+async function listStoredFilenames() {
+  if (!USE_NETLIFY_BLOBS) return listLocalFilenames();
+  const result = await blobStore.list();
+  return (result?.blobs || [])
+    .map((b) => b.key)
+    .filter((key) => key.endsWith('.xlsx') || key.endsWith('.xls'));
+}
+
+async function listStoredFiles() {
+  if (!USE_NETLIFY_BLOBS) {
+    const meta = loadMetadata();
+    return listLocalFilenames().map((filename) => {
+      const fullPath = path.join(TEST_SHEETS_PATH, filename);
+      const stats = fs.statSync(fullPath);
+      return {
+        filename,
+        size: stats.size,
+        modified: stats.mtime.toISOString(),
+        ownerEmail: meta[filename] || null,
+      };
+    });
+  }
+  const list = await blobStore.list();
+  const filenames = (list?.blobs || [])
+    .map((b) => b.key)
+    .filter((key) => key.endsWith('.xlsx') || key.endsWith('.xls'));
+  const entries = await Promise.all(
+    filenames.map(async (filename) => {
+      const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+      const metadata = metaResult?.metadata || {};
+      return {
+        filename,
+        size: typeof metadata.size === 'number' ? metadata.size : 0,
+        modified: metadata.updatedAt || new Date().toISOString(),
+        ownerEmail: metadata.ownerEmail || null,
+      };
+    })
+  );
+  return entries;
+}
+
+async function getStoredFileBuffer(filename) {
+  if (!USE_NETLIFY_BLOBS) {
+    const filePath = path.join(TEST_SHEETS_PATH, filename);
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath);
+  }
+  const data = await blobStore.get(filename, { type: 'arrayBuffer' });
+  if (!data) return null;
+  return Buffer.from(data);
+}
+
+async function storedFileExists(filename) {
+  if (!USE_NETLIFY_BLOBS) {
+    const filePath = path.join(TEST_SHEETS_PATH, filename);
+    return fs.existsSync(filePath);
+  }
+  const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+  return Boolean(metaResult);
+}
+
+async function saveStoredFile(filename, buffer, ownerEmail) {
+  if (!USE_NETLIFY_BLOBS) {
+    const filePath = path.join(TEST_SHEETS_PATH, filename);
+    fs.writeFileSync(filePath, buffer);
+    const meta = loadMetadata();
+    meta[filename] = ownerEmail || 'guest@local';
+    saveMetadata(meta);
+    return;
+  }
+  await blobStore.set(filename, buffer, {
+    metadata: {
+      ownerEmail: ownerEmail || 'guest@local',
+      size: buffer.length,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function deleteStoredFile(filename) {
+  if (!USE_NETLIFY_BLOBS) {
+    const filePath = path.join(TEST_SHEETS_PATH, filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    const meta = loadMetadata();
+    delete meta[filename];
+    saveMetadata(meta);
+    return;
+  }
+  await blobStore.delete(filename);
+}
+
+async function renameStoredFile(oldName, newName, ownerEmail) {
+  if (!USE_NETLIFY_BLOBS) {
+    const oldPath = path.join(TEST_SHEETS_PATH, oldName);
+    const newPath = path.join(TEST_SHEETS_PATH, newName);
+    fs.renameSync(oldPath, newPath);
+    const meta = loadMetadata();
+    const nextOwner = meta[oldName] || ownerEmail || 'guest@local';
+    delete meta[oldName];
+    meta[newName] = nextOwner;
+    saveMetadata(meta);
+    return { ownerEmail: nextOwner };
+  }
+  const data = await blobStore.get(oldName, { type: 'arrayBuffer' });
+  if (!data) return { ownerEmail: ownerEmail || 'guest@local' };
+  const metaResult = await blobStore.getMetadata(oldName).catch(() => null);
+  const metadata = metaResult?.metadata || {};
+  const buffer = Buffer.from(data);
+  const nextOwner = metadata.ownerEmail || ownerEmail || 'guest@local';
+  await blobStore.set(newName, buffer, {
+    metadata: {
+      ...metadata,
+      ownerEmail: nextOwner,
+      size: typeof metadata.size === 'number' ? metadata.size : buffer.length,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  await blobStore.delete(oldName);
+  return { ownerEmail: nextOwner };
+}
+
+async function getStoredOwnerEmail(filename) {
+  if (!USE_NETLIFY_BLOBS) {
+    const meta = loadMetadata();
+    return meta[filename] || null;
+  }
+  const metaResult = await blobStore.getMetadata(filename).catch(() => null);
+  return metaResult?.metadata?.ownerEmail || null;
+}
+
+/** If a file with the same name already exists (case-insensitive), returns that name; otherwise null. */
+async function findExistingFilenameConflict(desiredName) {
+  const files = await listStoredFilenames();
   const lower = desiredName.toLowerCase();
   return files.find((f) => f.toLowerCase() === lower) || null;
 }
@@ -418,29 +558,25 @@ app.get('/api/me', (req, res) => {
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.get('/api/sheets', requireAuth, (req, res) => {
+app.get('/api/sheets', requireAuth, async (req, res) => {
   try {
-    const files = fs.readdirSync(TEST_SHEETS_PATH)
-      .filter(f => f.endsWith('.xlsx') || f.endsWith('.xls'))
-      .map(filename => {
-        const fullPath = path.join(TEST_SHEETS_PATH, filename);
-        const stats = fs.statSync(fullPath);
-        const ticketMatch = filename.match(/^([A-Z]+-\d+)/);
-        const meta = loadMetadata();
-        const ownerEmail = meta[filename];
-        const owner = ownerEmail ? emailToName(ownerEmail) : null;
-        const ownedByMe = !ownerEmail || ownerEmail === req.session?.email;
+    const files = await listStoredFiles();
+    const results = files
+      .map((file) => {
+        const ticketMatch = file.filename.match(/^([A-Z]+-\d+)/);
+        const owner = file.ownerEmail ? emailToName(file.ownerEmail) : null;
+        const ownedByMe = !file.ownerEmail || file.ownerEmail === req.session?.email;
         return {
-          filename,
+          filename: file.filename,
           ticketKey: ticketMatch ? ticketMatch[1] : null,
-          size: stats.size,
-          modified: stats.mtime.toISOString(),
+          size: file.size,
+          modified: file.modified,
           owner,
           ownedByMe,
         };
       })
       .sort((a, b) => new Date(b.modified) - new Date(a.modified));
-    res.json(files);
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -449,9 +585,14 @@ app.get('/api/sheets', requireAuth, (req, res) => {
 app.get('/api/sheets/:filename/download', requireAuth, (req, res) => {
   const filename = path.basename(req.params.filename);
   if (filename !== req.params.filename) return res.status(400).send('Invalid filename');
-  const filePath = path.join(TEST_SHEETS_PATH, filename);
-  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-  res.download(filePath, filename);
+  (async () => {
+    const buffer = await getStoredFileBuffer(filename);
+    if (!buffer) return res.status(404).send('File not found');
+    const mime = filename.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '\\"')}"`);
+    res.send(buffer);
+  })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
 app.post('/api/sheets/download-batch', requireAuth, (req, res) => {
@@ -463,40 +604,40 @@ app.post('/api/sheets/download-batch', requireAuth, (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="test-sheets.zip"');
   const archive = archiver('zip', { zlib: { level: 9 } });
   archive.pipe(res);
-  for (const f of safeFiles) {
-    const filePath = path.join(TEST_SHEETS_PATH, f);
-    if (fs.existsSync(filePath)) archive.file(filePath, { name: f });
-  }
-  archive.finalize();
+  (async () => {
+    for (const f of safeFiles) {
+      const buffer = await getStoredFileBuffer(f);
+      if (buffer) archive.append(buffer, { name: f });
+    }
+    archive.finalize();
+  })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
 app.get('/api/sheets/open', requireAuth, (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('Missing file parameter');
   const safeName = path.basename(filename);
-  const filePath = path.join(TEST_SHEETS_PATH, safeName);
-  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-  const mime = safeName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
-  res.setHeader('Content-Type', mime);
-  res.setHeader('Content-Disposition', `inline; filename="${safeName.replace(/"/g, '\\"')}"`);
-  res.sendFile(path.resolve(filePath));
+  (async () => {
+    const buffer = await getStoredFileBuffer(safeName);
+    if (!buffer) return res.status(404).send('File not found');
+    const mime = safeName.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${safeName.replace(/"/g, '\\"')}"`);
+    res.send(buffer);
+  })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
-app.post('/api/sheets/upload', requireAuth, upload.single('file'), (req, res) => {
+app.post('/api/sheets/upload', requireAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const safeName = path.basename(req.file.originalname);
   if (safeName !== req.file.originalname) return res.status(400).json({ error: 'Invalid filename' });
-  const conflictName = findExistingFilenameConflict(safeName);
+  const conflictName = await findExistingFilenameConflict(safeName);
   if (conflictName) {
     return res.status(409).json({
       error: duplicateFileError(conflictName),
     });
   }
-  const filePath = path.join(TEST_SHEETS_PATH, safeName);
-  fs.writeFileSync(filePath, req.file.buffer);
-  const meta = loadMetadata();
-  meta[safeName] = req.session?.email || 'guest@local';
-  saveMetadata(meta);
+  await saveStoredFile(safeName, req.file.buffer, req.session?.email || 'guest@local');
   res.json({ filename: safeName, success: true });
 });
 
@@ -514,13 +655,12 @@ app.post('/api/sheets/create-from-ticket', requireAuth, async (req, res) => {
   const summary = issue.fields?.summary?.trim() || key;
   const safeSummary = sanitizeFilenameComponent(summary);
   const filename = `${key}_${safeSummary}.xlsx`;
-  const conflictName = findExistingFilenameConflict(filename);
+  const conflictName = await findExistingFilenameConflict(filename);
   if (conflictName) {
     return res.status(409).json({
       error: duplicateFileError(conflictName),
     });
   }
-  const filePath = path.join(TEST_SHEETS_PATH, filename);
   try {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('ManualTests', { views: [{ state: 'frozen', ySplit: 3 }] });
@@ -611,10 +751,8 @@ app.post('/api/sheets/create-from-ticket', requireAuth, async (req, res) => {
         rowIndex += 1;
       });
     }
-    fs.writeFileSync(filePath, await workbook.xlsx.writeBuffer());
-    const meta = loadMetadata();
-    meta[filename] = req.session?.email || 'guest@local';
-    saveMetadata(meta);
+    const buffer = await workbook.xlsx.writeBuffer();
+    await saveStoredFile(filename, buffer, req.session?.email || 'guest@local');
     res.json({ filename, success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -637,50 +775,46 @@ app.post('/api/sheets/rename', requireAuth, (req, res) => {
   if (!newName.endsWith('.xlsx') && !newName.endsWith('.xls')) {
     return res.status(400).json({ error: 'Filename must end with .xlsx or .xls' });
   }
-  const oldPath = path.join(TEST_SHEETS_PATH, oldName);
-  if (!fs.existsSync(oldPath)) return res.status(404).json({ error: 'File not found' });
-
-  const meta = loadMetadata();
-  const ownerEmail = meta[oldName];
-  if (ownerEmail && ownerEmail !== req.session?.email) {
-    return res.status(403).json({ error: 'You can only rename files you uploaded' });
-  }
-
-  const conflictName = findExistingFilenameConflict(newName);
-  if (conflictName && conflictName.toLowerCase() !== oldName.toLowerCase()) {
-    return res.status(409).json({ error: duplicateFileError(conflictName) });
-  }
-  if (conflictName && conflictName.toLowerCase() === oldName.toLowerCase()) {
-    return res.status(400).json({ error: 'New filename differs only by case' });
-  }
-
-  const newPath = path.join(TEST_SHEETS_PATH, newName);
-  fs.renameSync(oldPath, newPath);
-  const nextOwner = ownerEmail || req.session?.email || 'guest@local';
-  delete meta[oldName];
-  meta[newName] = nextOwner;
-  saveMetadata(meta);
-  res.json({ success: true, filename: newName });
+  (async () => {
+    const exists = await storedFileExists(oldName);
+    if (!exists) return res.status(404).json({ error: 'File not found' });
+    const ownerEmail = await getStoredOwnerEmail(oldName);
+    if (ownerEmail && ownerEmail !== req.session?.email) {
+      return res.status(403).json({ error: 'You can only rename files you uploaded' });
+    }
+    const conflictName = await findExistingFilenameConflict(newName);
+    if (conflictName && conflictName.toLowerCase() !== oldName.toLowerCase()) {
+      return res.status(409).json({ error: duplicateFileError(conflictName) });
+    }
+    if (conflictName && conflictName.toLowerCase() === oldName.toLowerCase()) {
+      return res.status(400).json({ error: 'New filename differs only by case' });
+    }
+    await renameStoredFile(oldName, newName, ownerEmail || req.session?.email || 'guest@local');
+    res.json({ success: true, filename: newName });
+  })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
 app.delete('/api/sheets/:filename', requireAuth, (req, res) => {
   const filename = path.basename(req.params.filename);
   if (filename !== req.params.filename) return res.status(400).json({ error: 'Invalid filename' });
-  const meta = loadMetadata();
-  const ownerEmail = meta[filename];
-  if (ownerEmail && ownerEmail !== req.session?.email) {
-    return res.status(403).json({ error: 'You can only delete files you uploaded' });
-  }
-  const filePath = path.join(TEST_SHEETS_PATH, filename);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-  fs.unlinkSync(filePath);
-  delete meta[filename];
-  saveMetadata(meta);
-  res.json({ success: true });
+  (async () => {
+    const ownerEmail = await getStoredOwnerEmail(filename);
+    if (ownerEmail && ownerEmail !== req.session?.email) {
+      return res.status(403).json({ error: 'You can only delete files you uploaded' });
+    }
+    const exists = await storedFileExists(filename);
+    if (!exists) return res.status(404).json({ error: 'File not found' });
+    await deleteStoredFile(filename);
+    res.json({ success: true });
+  })().catch((err) => res.status(500).json({ error: err.message }));
 });
 
-app.listen(PORT, () => {
-  console.log(`Test Sheet Manager running at http://localhost:${PORT}`);
-  console.log(`Sheets folder: ${TEST_SHEETS_PATH}`);
-  if (AUTH_DISABLED) console.log('Auth is DISABLED — login bypassed');
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Test Sheet Manager running at http://localhost:${PORT}`);
+    console.log(`Sheets folder: ${TEST_SHEETS_PATH}`);
+    if (AUTH_DISABLED) console.log('Auth is DISABLED — login bypassed');
+  });
+}
+
+module.exports = { app };
