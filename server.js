@@ -15,7 +15,15 @@ try {
 }
 const TEST_SHEETS_PATH = config.testSheetsPath || path.join(__dirname, 'Testsheets');
 const METADATA_PATH = path.join(__dirname, 'sheets-metadata.json');
-const USE_NETLIFY_BLOBS = Boolean(process.env.NETLIFY || process.env.NETLIFY_DEV || process.env.NETLIFY_BLOBS_CONTEXT);
+const NETLIFY_SITE_ID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+const NETLIFY_AUTH_TOKEN = process.env.NETLIFY_AUTH_TOKEN || process.env.NETLIFY_TOKEN;
+const USE_NETLIFY_BLOBS = Boolean(
+  process.env.NETLIFY_BLOBS_CONTEXT ||
+  NETLIFY_SITE_ID ||
+  NETLIFY_AUTH_TOKEN ||
+  process.env.NETLIFY ||
+  process.env.NETLIFY_DEV
+);
 const netlifyBlobs = USE_NETLIFY_BLOBS ? require('@netlify/blobs') : null;
 let blobStore = null;
 
@@ -23,9 +31,7 @@ function getBlobStore() {
   if (!USE_NETLIFY_BLOBS) return null;
   if (!blobStore) {
     try {
-      const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
-      const token = process.env.NETLIFY_AUTH_TOKEN || process.env.NETLIFY_TOKEN;
-      const options = siteID && token ? { siteID, token } : undefined;
+      const options = NETLIFY_SITE_ID && NETLIFY_AUTH_TOKEN ? { siteID: NETLIFY_SITE_ID, token: NETLIFY_AUTH_TOKEN } : undefined;
       blobStore = netlifyBlobs.getStore('testsheets', options);
     } catch (err) {
       throw new Error(`Netlify Blobs not initialized: ${err.message || err}`);
@@ -74,6 +80,7 @@ if (!USE_NETLIFY_BLOBS && !fs.existsSync(TEST_SHEETS_PATH)) {
 }
 
 function listLocalFilenames() {
+  if (!fs.existsSync(TEST_SHEETS_PATH)) return [];
   return fs.readdirSync(TEST_SHEETS_PATH).filter((f) => f.endsWith('.xlsx') || f.endsWith('.xls'));
 }
 
