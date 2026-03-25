@@ -23,7 +23,10 @@ function getBlobStore() {
   if (!USE_NETLIFY_BLOBS) return null;
   if (!blobStore) {
     try {
-      blobStore = netlifyBlobs.getStore('testsheets');
+      const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+      const token = process.env.NETLIFY_AUTH_TOKEN || process.env.NETLIFY_TOKEN;
+      const options = siteID && token ? { siteID, token } : undefined;
+      blobStore = netlifyBlobs.getStore('testsheets', options);
     } catch (err) {
       throw new Error(`Netlify Blobs not initialized: ${err.message || err}`);
     }
